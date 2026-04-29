@@ -1,0 +1,101 @@
+pipeline{
+	agent any
+	options{
+		timeout(time: 5,unit: 'MINUTES')
+		retry(1)
+	}
+	parameters{
+		string(name: 'git_repo', defaultValue: 'https://github.com/liteshz1778/httpd_server_files.git', description: 'Enter Git Url:')
+		string(name: 'git_branch', defaultValue: 'master', description: 'Enter Git Branch:')
+		string(name: 'image_name', defaultValue: 'httpd_server_files', description: 'Enter Image Name:')
+		string(name: 'image_tag', defaultValue: 'latest', description: 'Enter Image Tag:')
+		string(name: 'local_expose_port', defaultValue: '9090', description: 'Enter Local Exposed Port No.')
+		string(name: 'container_exposed_port', defaultValue: '80', description: 'Enter Container Exposed Port No.')
+		booleanParam(name: 'push_image', defaultValue: false, description: 'Enter true if we want to push image to registry')
+	}
+	environment{
+		docker_username="liteshz"
+	}
+	stages{
+		stage("Workspace CleanUp"){
+			steps{ 
+				sh "rm -rvf *"
+			}
+		}
+		stage("Cloning Git Repo...."){
+			steps{
+				sh "git clone -b ${params.git_branch} ${params.git_repo}"
+			}
+		}
+		stage("Fetch Git Repo Name"){
+			steps{
+				script{
+					env.REPO_NAME = params.git_repo.tokenize("/").last().replace(".git","")
+					echo "REPO_NAME: ${env.REPO_NAME}"
+				}
+			}
+		}
+		stage('Registry Login') {
+			steps {
+				withCredentials([usernamePassword(
+					credentialsId: '94e0c6b1-254f-4a6f-8f6c-35cb870e7878',
+					usernameVariable: 'DOCKER_USER',
+					passwordVariable: 'DOCKER_PASS'
+				)]) {
+						sh """
+							set -e
+							docker login -u $DOCKER_USER -p $DOCKER_PASS
+						"""
+					}
+			}
+		}
+		stage("Build Docker Image"){
+			steps{
+				dir(env.REPO_NAME){
+					sh """
+						set -e
+						docker build -t ${env.docker_username}/${params.image_name}:${params.image_tag} .
+					"""
+				}
+			}
+		}
+		stage("Delete Older Running Container"){
+			steps{
+				dir(env.REPO_NAME){
+					sh """
+						set -e
+						docker container rm -f webapp || true
+					"""
+				}
+			}
+		}
+		stage("Running Container & exposing localhost port to access the service"){
+			steps{
+				sh """
+					set -e			
+					docker run -d --name webapp -p ${params.local_expose_port}:${params.container_exposed_port} ${params.image_name}:${params.image_tag}
+				"""	
+			}
+		}
+		stage("Push Image based user input..."){
+			steps{
+				script{
+					if(params.push_image == true){
+						sh "docker push ${env.docker_username}/${params.image_name}:${params.image_tag}"
+					}
+				}
+			}
+		}
+		post {
+			always {
+				sh 'docker logout || true'
+			}
+			success {
+				sh 'echo "Application Build Successfully"'
+			}
+			failure {
+				sh 'echo "Fixing is required!!"'
+			}
+		}
+	}
+}
